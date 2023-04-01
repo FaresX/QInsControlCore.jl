@@ -95,7 +95,11 @@ function init!(cpu::Processor)
         empty!(cpu.tasks)
         empty!(cpu.taskhandlers)
         for (addr, instr) in cpu.instrs
-            connect!(cpu.resourcemanager, instr)
+            try
+                connect!(cpu.resourcemanager, instr)
+            catch e
+                @error "connecting to $addr failed" exception=e
+            end
             push!(cpu.exechannels, addr => [])
             push!(cpu.taskhandlers, addr => false)
         end
