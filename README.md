@@ -11,12 +11,16 @@ using QInsControlCore
 using QInsControlCore.Instruments
 cpu = Processor()
 ct = Controller()
+login!(cpu, ct)
+start!(cpu)
 ct(query, cpu, "*IDN?", Val(:query))
 while !isready(ct)
 yield()
 end
 idn = getdata!(ct)
-# or you can simply use it by
+# or you can simply use it through
 # idn = ct(query, cpu, "*IDN?", Val(:waitquery))
+logout!(cpu, ct)
+stop!(cpu)
 ```
 
