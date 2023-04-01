@@ -62,7 +62,6 @@ end
 (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:write}) = (push!(cpu.cmdchannel, (ct.id, f, val, Val(:write))); return nothing)
 (ct::Controller)(f::Function, cpu::Processor, ::Val{:read}) = (push!(cpu.cmdchannel, (ct.id, f, "", Val(:read))); return nothing)
 (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:query}) = (push!(cpu.cmdchannel, (ct.id, f, val, Val(:query))); return nothing)
-
 function (ct::Controller)(f::Function, cpu::Processor, ::Val{:waitread})
     push!(cpu.cmdchannel, (ct.id, f, "", Val(:read)))
     t1 = time()
@@ -81,6 +80,9 @@ function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:waitq
     @assert time() - t1 < 6 "timeout"
     popfirst!(ct.databuf)
 end
+
+Base.isready(ct::Controller) = !isempty(ct.databuf)
+getdata!(ct::Controller) = popfirst!(ct.databuf)
 
 runcmd(cpu::Processor, id::UUID, f::Function, val::String, ::Val{:write}) = (f(cpu.instrs[cpu.controllers[id].addr], val); return nothing)
 runcmd(cpu::Processor, id::UUID, f::Function, ::String, ::Val{:read}) = (ct = cpu.controllers[id]; push!(ct.databuf, f(cpu.instrs[ct.addr])); return nothing)
