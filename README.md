@@ -1,7 +1,7 @@
 # QInsControlCore
 This package is used to resolve conflicts when multiple coprocesses send commands to the same instrument simultaneously.
 # install
-```julia
+```
 julia> ]
 (@v1.9) pkg> add https://github.com/Faresx/QInsControlCore.jl.git
 ```
