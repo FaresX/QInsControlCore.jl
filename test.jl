@@ -1,6 +1,6 @@
 using Instruments
 using BenchmarkTools
-f(instr, val="") = string(time())
+f(instr, val="") = (sleep(0.001); string(time()))
 g(instr) = ""
 
 cpu = QInsControlCore.Processor()
@@ -14,25 +14,31 @@ QInsControlCore.login!(cpu, ct2)
 QInsControlCore.start!(cpu)
 
 cpu
-ct1(f, cpu, "", Val(:query))
-ct1(f, cpu, Val(:read))
 
-@benchmark (ct1(f, cpu, "", Val(:query)); timedwait(()->!isempty(ct1.databuf), 1; pollint=0.001); popfirst!(ct1.databuf))
+@benchmark ct1(f, cpu, "", Val(:query))
+@benchmark ct1(f, cpu, Val(:read))
 
-@benchmark f("s", "")
+@timev ct1(f, cpu, "", Val(:query))
+@benchmark f("", "")
 
-@benchmark begin
-    ct1(f, cpu, "", Val(:query))
-    t1 = time()
-    while isempty(ct1.databuf) && time() - t1 < 1
-        yield()
-    end
-    popfirst!(ct1.databuf)
+v = []
+@benchmark @sync begin
+    empty!(v)
+    push!(v, ct1(f, cpu, "", Val(:query)))
+    push!(v, ct1(f, cpu, Val(:read)))
 end
 
-@benchmark (ct1(f, cpu, "", Val(:query)); take!(ct1.databuf))
+@benchmark @sync begin
+    empty!(v)
+    @async push!(v, ct1(f, cpu, "", Val(:query)))
+    @async push!(v, ct1(f, cpu, Val(:read)))
+end
 
-@benchmark ct1(f, cpu, "", Val(:waitquery))
+v
+vi = parse.(Float64, v)
+vi[2]-vi[1]
+
+
 
 empty!(ct1.databuf)
 ct1.databuf

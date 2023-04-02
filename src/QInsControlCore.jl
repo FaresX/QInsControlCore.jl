@@ -4,7 +4,7 @@ module QInsControlCore
     using UUIDs
 
     export Controller, Processor
-    export login!, logout!, start!, stop!, isready, getdata!, reconnect!
+    export login!, logout!, start!, stop!, reconnect!
 
     include("Instruments.jl")
     include("DataStream.jl")

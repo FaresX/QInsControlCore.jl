@@ -2,22 +2,21 @@ struct Controller
     id::UUID
     instrnm::String
     addr::String
-    databuf::Vector{String}
-    Controller(instrnm, addr) = new(uuid4(), instrnm, addr, [])
+    databuf::Dict{UUID,String}
+    Controller(instrnm, addr) = new(uuid4(), instrnm, addr, Dict())
 end
 
 struct Processor
     id::UUID
     controllers::Dict{UUID,Controller}
-    lock::ReentrantLock
-    cmdchannel::Vector{Tuple{UUID,Function,String,Val}}
-    exechannels::Dict{String,Vector{Tuple{UUID,Function,String,Val}}}
+    cmdchannel::Vector{Tuple{UUID,UUID,Function,String,Val}}
+    exechannels::Dict{String,Vector{Tuple{UUID,UUID,Function,String,Val}}}
     tasks::Dict{String,Task}
     taskhandlers::Dict{String,Bool}
     resourcemanager::UInt32
     instrs::Dict{String,Instrument}
     running::Ref{Bool}
-    Processor() = new(uuid4(), Dict(), ReentrantLock(), [], Dict(), Dict(), Dict(), ResourceManager(), Dict(), Ref(false))
+    Processor() = new(uuid4(), Dict(), [], Dict(), Dict(), Dict(), ResourceManager(), Dict(), Ref(false))
 end
 
 function login!(cpu::Processor, ct::Controller)
@@ -43,7 +42,8 @@ function login!(cpu::Processor, ct::Controller)
 end
 
 function logout!(cpu::Processor, ct::Controller)
-    popct = pop!(cpu.controllers, ct.id)
+    popct = pop!(cpu.controllers, ct.id, 1)
+    popct == 1 && return nothing
     if !in(popct.addr, map(ct -> ct.addr, values(cpu.controllers)))
         popinstr = pop!(cpu.instrs, ct.addr)
         if cpu.running[]
@@ -58,35 +58,59 @@ function logout!(cpu::Processor, ct::Controller)
     end
     return nothing
 end
-
-(ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:write}) = (push!(cpu.cmdchannel, (ct.id, f, val, Val(:write))); return nothing)
-(ct::Controller)(f::Function, cpu::Processor, ::Val{:read}) = (push!(cpu.cmdchannel, (ct.id, f, "", Val(:read))); return nothing)
-(ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:query}) = (push!(cpu.cmdchannel, (ct.id, f, val, Val(:query))); return nothing)
-function (ct::Controller)(f::Function, cpu::Processor, ::Val{:waitread})
-    push!(cpu.cmdchannel, (ct.id, f, "", Val(:read)))
-    t1 = time()
-    while isempty(ct.databuf) && time() - t1 < 6
-        yield()
+function logout!(cpu::Processor, addr::String)
+    for ct in cpu.controllers
+        ct.addr == addr && logout!(cpu, ct)
     end
-    @assert time() - t1 < 6 "timeout"
-    popfirst!(ct.databuf)
-end
-function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:waitquery})
-    push!(cpu.cmdchannel, (ct.id, f, val, Val(:query)))
-    t1 = time()
-    while isempty(ct.databuf) && time() - t1 < 6
-        yield()
-    end
-    @assert time() - t1 < 6 "timeout"
-    popfirst!(ct.databuf)
 end
 
-Base.isready(ct::Controller) = !isempty(ct.databuf)
-getdata!(ct::Controller) = popfirst!(ct.databuf)
+function (ct::Controller)(f::Function, cpu::Processor, ::Val{:write})
+    cmdid = uuid4()
+    push!(cpu.cmdchannel, (ct.id, cmdid, f, val, Val(:write)))
+    t1 = time()
+    while !haskey(ct.databuf, cmdid) && time() - t1 < 6
+        yield()
+    end
+    @assert haskey(ct.databuf, cmdid) "timeout"
+    pop!(ct.databuf, cmdid)
+end
+function (ct::Controller)(f::Function, cpu::Processor, ::Val{:read})
+    cmdid = uuid4()
+    push!(cpu.cmdchannel, (ct.id, cmdid, f, "", Val(:read)))
+    t1 = time()
+    while !haskey(ct.databuf, cmdid) && time() - t1 < 6
+        yield()
+    end
+    @assert haskey(ct.databuf, cmdid) "timeout"
+    pop!(ct.databuf, cmdid)
+end
+function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:query})
+    cmdid = uuid4()
+    push!(cpu.cmdchannel, (ct.id, cmdid, f, val, Val(:query)))
+    t1 = time()
+    while !haskey(ct.databuf, cmdid) && time() - t1 < 6
+        yield()
+    end
+    @assert haskey(ct.databuf, cmdid) "timeout"
+    pop!(ct.databuf, cmdid)
+end
 
-runcmd(cpu::Processor, id::UUID, f::Function, val::String, ::Val{:write}) = (f(cpu.instrs[cpu.controllers[id].addr], val); return nothing)
-runcmd(cpu::Processor, id::UUID, f::Function, ::String, ::Val{:read}) = (ct = cpu.controllers[id]; push!(ct.databuf, f(cpu.instrs[ct.addr])); return nothing)
-runcmd(cpu::Processor, id::UUID, f::Function, val::String, ::Val{:query}) = (ct = cpu.controllers[id]; push!(ct.databuf, f(cpu.instrs[ct.addr], val)); return nothing)
+function runcmd(cpu::Processor, ctid::UUID, cmdid::UUID, f::Function, val::String, ::Val{:write})
+    ct = cpu.controllers[ctid]
+    f(cpu.instrs[ct.addr], val)
+    push!(ct.databuf, cmdid => "done")
+    return nothing
+end
+function runcmd(cpu::Processor, ctid::UUID, cmdid::UUID, f::Function, ::String, ::Val{:read})
+    ct = cpu.controllers[ctid]
+    push!(ct.databuf, cmdid => f(cpu.instrs[ct.addr]))
+    return nothing
+end
+function runcmd(cpu::Processor, ctid::UUID, cmdid::UUID, f::Function, val::String, ::Val{:query})
+    ct = cpu.controllers[ctid]
+    push!(ct.databuf, cmdid => f(cpu.instrs[ct.addr], val))
+    return nothing
+end
 
 function init!(cpu::Processor)
     if !cpu.running[]
@@ -116,8 +140,8 @@ function run!(cpu::Processor)
         errormonitor(
             @async while cpu.running[]
                 if !isempty(cpu.cmdchannel)
-                    id, f, val, type = popfirst!(cpu.cmdchannel)
-                    push!(cpu.exechannels[cpu.controllers[id].addr], (id, f, val, type))
+                    ctid, cmdid, f, val, type = popfirst!(cpu.cmdchannel)
+                    push!(cpu.exechannels[cpu.controllers[ctid].addr], (ctid, cmdid, f, val, type))
                 end
                 yield()
             end
