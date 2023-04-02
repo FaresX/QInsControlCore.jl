@@ -59,7 +59,7 @@ function logout!(cpu::Processor, ct::Controller)
     return nothing
 end
 function logout!(cpu::Processor, addr::String)
-    for ct in cpu.controllers
+    for ct in values(cpu.controllers)
         ct.addr == addr && logout!(cpu, ct)
     end
 end
