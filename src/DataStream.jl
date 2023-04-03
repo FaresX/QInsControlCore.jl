@@ -22,7 +22,7 @@ end
 function login!(cpu::Processor, ct::Controller)
     push!(cpu.controllers, ct.id => ct)
     if cpu.running[]
-        @warn "cpu($(cpu.id)) is running!"
+        # @warn "cpu($(cpu.id)) is running!"
         if !haskey(cpu.instrs, ct.addr)
             push!(cpu.instrs, ct.addr => instrument(ct.instrnm, ct.addr))
             push!(cpu.exechannels, ct.addr => [])
@@ -31,7 +31,7 @@ function login!(cpu::Processor, ct::Controller)
                 isempty(cpu.exechannels[ct.addr]) || runcmd(cpu, popfirst!(cpu.exechannels[ct.addr])...)
                 yield()
             end
-            @info "task(address: $(ct.addr)) is created"
+            # @info "task(address: $(ct.addr)) is created"
             push!(cpu.tasks, ct.addr => errormonitor(t))
             connect!(cpu.resourcemanager, cpu.instrs[ct.addr])
         end
@@ -47,7 +47,7 @@ function logout!(cpu::Processor, ct::Controller)
     if !in(popct.addr, map(ct -> ct.addr, values(cpu.controllers)))
         popinstr = pop!(cpu.instrs, ct.addr)
         if cpu.running[]
-            @warn "cpu($(cpu.id)) is running!"
+            # @warn "cpu($(cpu.id)) is running!"
             cpu.taskhandlers[popinstr.addr] = false
             wait(cpu.tasks[popinstr.addr])
             pop!(cpu.taskhandlers, popinstr.addr)
