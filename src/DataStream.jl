@@ -64,7 +64,7 @@ function logout!(cpu::Processor, addr::String)
     end
 end
 
-function (ct::Controller)(f::Function, cpu::Processor, ::Val{:write})
+function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:write})
     cmdid = uuid4()
     push!(cpu.cmdchannel, (ct.id, cmdid, f, val, Val(:write)))
     t1 = time()
