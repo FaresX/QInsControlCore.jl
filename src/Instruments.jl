@@ -74,9 +74,9 @@ Instruments.write(::VirtualInstr, ::AbstractString) = nothing
 Instruments.read(instr::GPIBInstr) = read(instr.geninstr)
 Instruments.read(instr::SerialInstr) = read(instr.geninstr)
 Instruments.read(instr::TCPIPInstr) = readline(instr.sock[])
-Instruments.read(::VirtualInstr) = nothing
+Instruments.read(::VirtualInstr) = "read"
 
 Instruments.query(instr::GPIBInstr, msg::AbstractString; delay=0) = query(instr.geninstr, msg; delay=delay)
 Instruments.query(instr::SerialInstr, msg::AbstractString; delay=0) = query(instr.geninstr, string(msg, "\n"); delay=delay)
 Instruments.query(instr::TCPIPInstr, msg::AbstractString; delay=0) = (println(instr.sock[], msg); sleep(delay); readline(instr.sock[]))
-Instruments.query(::VirtualInstr, ::AbstractString; delay=0) = nothing
+Instruments.query(::VirtualInstr, ::AbstractString; delay=0) = "query"
