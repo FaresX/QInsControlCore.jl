@@ -66,7 +66,6 @@ end
 
 function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:write})
     cmdid = uuid4()
-    @info cmdid
     push!(cpu.cmdchannel, (ct.id, cmdid, f, val, Val(:write)))
     t1 = time()
     while !haskey(ct.databuf, cmdid) && time() - t1 < 6
