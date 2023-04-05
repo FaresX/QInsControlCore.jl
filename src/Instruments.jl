@@ -49,13 +49,13 @@ end
 
 connect!(rm, instr::GPIBInstr) = Instruments.connect!(rm, instr.geninstr, instr.addr)
 connect!(rm, instr::SerialInstr) = Instruments.connect!(rm, instr.geninstr, instr.addr)
-function connect!(::UInt32, instr::TCPIPInstr)
+function connect!(_, instr::TCPIPInstr)
     if !instr.connected[]
         instr.sock[] = Sockets.connect(instr.ip, instr.port)
         instr.connected[] = true
     end
 end
-connect!(::UInt32, ::VirtualInstr) = nothing
+connect!(_, ::VirtualInstr) = nothing
 connect!(instr::Instrument) = connect!(ResourceManager(), instr)
 
 disconnect!(instr::GPIBInstr) = Instruments.disconnect!(instr.geninstr)
