@@ -19,6 +19,8 @@ struct Processor
     Processor() = new(uuid4(), Dict(), [], Dict(), Dict(), Dict(), ResourceManager(), Dict(), Ref(false))
 end
 
+find_resources(cpu::Processor) = Instruments.find_resources(cpu.resourcemanager)
+
 function login!(cpu::Processor, ct::Controller)
     push!(cpu.controllers, ct.id => ct)
     if cpu.running[]
