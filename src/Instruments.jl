@@ -58,8 +58,8 @@ end
 connect!(::UInt32, ::VirtualInstr) = nothing
 connect!(instr::Instrument) = connect!(ResourceManager(), instr)
 
-disconnect!(instr::GPIBInstr) = disconnect!(instr.geninstr)
-disconnect!(instr::SerialInstr) = disconnect!(instr.geninstr)
+disconnect!(instr::GPIBInstr) = Instruments.disconnect!(instr.geninstr)
+disconnect!(instr::SerialInstr) = Instruments.disconnect!(instr.geninstr)
 function disconnect!(instr::TCPIPInstr)
     if instr.connected[]
         close(instr.sock[])
@@ -68,17 +68,17 @@ function disconnect!(instr::TCPIPInstr)
 end
 disconnect!(::VirtualInstr) = nothing
 
-write(instr::GPIBInstr, msg::AbstractString) = write(instr.geninstr, msg)
-write(instr::SerialInstr, msg::AbstractString) = write(instr.geninstr, string(msg, "\n"))
+write(instr::GPIBInstr, msg::AbstractString) = Instruments.write(instr.geninstr, msg)
+write(instr::SerialInstr, msg::AbstractString) = Instruments.write(instr.geninstr, string(msg, "\n"))
 write(instr::TCPIPInstr, msg::AbstractString) = println(instr.sock[], msg)
 write(::VirtualInstr, ::AbstractString) = nothing
 
-read(instr::GPIBInstr) = read(instr.geninstr)
-read(instr::SerialInstr) = read(instr.geninstr)
+read(instr::GPIBInstr) = Instruments.read(instr.geninstr)
+read(instr::SerialInstr) = Instruments.read(instr.geninstr)
 read(instr::TCPIPInstr) = readline(instr.sock[])
 read(::VirtualInstr) = "read"
 
-query(instr::GPIBInstr, msg::AbstractString; delay=0) = query(instr.geninstr, msg; delay=delay)
-query(instr::SerialInstr, msg::AbstractString; delay=0) = query(instr.geninstr, string(msg, "\n"); delay=delay)
+query(instr::GPIBInstr, msg::AbstractString; delay=0) = Instruments.query(instr.geninstr, msg; delay=delay)
+query(instr::SerialInstr, msg::AbstractString; delay=0) = Instruments.query(instr.geninstr, string(msg, "\n"); delay=delay)
 query(instr::TCPIPInstr, msg::AbstractString; delay=0) = (println(instr.sock[], msg); sleep(delay); readline(instr.sock[]))
 query(::VirtualInstr, ::AbstractString; delay=0) = "query"
