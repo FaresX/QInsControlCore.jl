@@ -1,3 +1,5 @@
+abstract type Instrument end
+
 struct GPIBInstr <: Instrument
     name::String
     addr::String
@@ -45,38 +47,38 @@ function instrument(name, addr)
     end
 end
 
-Instruments.connect!(rm, instr::GPIBInstr) = connect!(rm, instr.geninstr, instr.addr)
-Instruments.connect!(rm, instr::SerialInstr) = connect!(rm, instr.geninstr, instr.addr)
-function Instruments.connect!(rm, instr::TCPIPInstr)
+connect!(rm, instr::GPIBInstr) = Instruments.connect!(rm, instr.geninstr, instr.addr)
+connect!(rm, instr::SerialInstr) = Instruments.connect!(rm, instr.geninstr, instr.addr)
+function connect!(::UInt32, instr::TCPIPInstr)
     if !instr.connected[]
         instr.sock[] = Sockets.connect(instr.ip, instr.port)
         instr.connected[] = true
     end
 end
-Instruments.connect!(rm, instr::VirtualInstr) = nothing
-Instruments.connect!(instr::Instrument) = connect!(ResourceManager(), instr)
+connect!(::UInt32, ::VirtualInstr) = nothing
+connect!(instr::Instrument) = connect!(ResourceManager(), instr)
 
-Instruments.disconnect!(instr::GPIBInstr) = disconnect!(instr.geninstr)
-Instruments.disconnect!(instr::SerialInstr) = disconnect!(instr.geninstr)
-function Instruments.disconnect!(instr::TCPIPInstr)
+disconnect!(instr::GPIBInstr) = disconnect!(instr.geninstr)
+disconnect!(instr::SerialInstr) = disconnect!(instr.geninstr)
+function disconnect!(instr::TCPIPInstr)
     if instr.connected[]
         close(instr.sock[])
         instr.connected[] = false
     end
 end
-Instruments.disconnect!(::VirtualInstr) = nothing
+disconnect!(::VirtualInstr) = nothing
 
-Instruments.write(instr::GPIBInstr, msg::AbstractString) = write(instr.geninstr, msg)
-Instruments.write(instr::SerialInstr, msg::AbstractString) = write(instr.geninstr, string(msg, "\n"))
-Instruments.write(instr::TCPIPInstr, msg::AbstractString) = println(instr.sock[], msg)
-Instruments.write(::VirtualInstr, ::AbstractString) = nothing
+write(instr::GPIBInstr, msg::AbstractString) = write(instr.geninstr, msg)
+write(instr::SerialInstr, msg::AbstractString) = write(instr.geninstr, string(msg, "\n"))
+write(instr::TCPIPInstr, msg::AbstractString) = println(instr.sock[], msg)
+write(::VirtualInstr, ::AbstractString) = nothing
 
-Instruments.read(instr::GPIBInstr) = read(instr.geninstr)
-Instruments.read(instr::SerialInstr) = read(instr.geninstr)
-Instruments.read(instr::TCPIPInstr) = readline(instr.sock[])
-Instruments.read(::VirtualInstr) = "read"
+read(instr::GPIBInstr) = read(instr.geninstr)
+read(instr::SerialInstr) = read(instr.geninstr)
+read(instr::TCPIPInstr) = readline(instr.sock[])
+read(::VirtualInstr) = "read"
 
-Instruments.query(instr::GPIBInstr, msg::AbstractString; delay=0) = query(instr.geninstr, msg; delay=delay)
-Instruments.query(instr::SerialInstr, msg::AbstractString; delay=0) = query(instr.geninstr, string(msg, "\n"); delay=delay)
-Instruments.query(instr::TCPIPInstr, msg::AbstractString; delay=0) = (println(instr.sock[], msg); sleep(delay); readline(instr.sock[]))
-Instruments.query(::VirtualInstr, ::AbstractString; delay=0) = "query"
+query(instr::GPIBInstr, msg::AbstractString; delay=0) = query(instr.geninstr, msg; delay=delay)
+query(instr::SerialInstr, msg::AbstractString; delay=0) = query(instr.geninstr, string(msg, "\n"); delay=delay)
+query(instr::TCPIPInstr, msg::AbstractString; delay=0) = (println(instr.sock[], msg); sleep(delay); readline(instr.sock[]))
+query(::VirtualInstr, ::AbstractString; delay=0) = "query"
