@@ -1,5 +1,12 @@
 module QInsControlCore
+    using Instruments
+    using Sockets
+    using UUIDs
 
-# Write your package code here.
+    export Controller, Processor
+    export login!, logout!, start!, stop!, reconnect!, find_resources
+    export instrument, connect!, disconnect!, write, read, query
 
-end
+    include("Instruments.jl")
+    include("DataStream.jl")
+end # module QInsControlCore
