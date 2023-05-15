@@ -16,7 +16,8 @@ struct Processor
     resourcemanager::UInt32
     instrs::Dict{String,Instrument}
     running::Ref{Bool}
-    Processor() = new(uuid4(), Dict(), [], Dict(), Dict(), Dict(), ResourceManager(), Dict(), Ref(false))
+    sleeping::Ref{Bool}
+    Processor() = new(uuid4(), Dict(), [], Dict(), Dict(), Dict(), ResourceManager(), Dict(), Ref(false), Ref(false))
 end
 
 find_resources(cpu::Processor) = Instruments.find_resources(cpu.resourcemanager)
@@ -116,6 +117,7 @@ end
 
 function init!(cpu::Processor)
     if !cpu.running[]
+        cpu.sleeping[] = false
         empty!(cpu.cmdchannel)
         empty!(cpu.exechannels)
         empty!(cpu.tasks)
@@ -141,9 +143,13 @@ function run!(cpu::Processor)
         cpu.running[] = true
         errormonitor(
             @async while cpu.running[]
-                if !isempty(cpu.cmdchannel)
-                    ctid, cmdid, f, val, type = popfirst!(cpu.cmdchannel)
-                    push!(cpu.exechannels[cpu.controllers[ctid].addr], (ctid, cmdid, f, val, type))
+                if cpu.sleeping[]
+                    sleep(0.001)
+                else
+                    if !isempty(cpu.cmdchannel)
+                        ctid, cmdid, f, val, type = popfirst!(cpu.cmdchannel)
+                        push!(cpu.exechannels[cpu.controllers[ctid].addr], (ctid, cmdid, f, val, type))
+                    end
                 end
                 yield()
             end
@@ -159,15 +165,19 @@ function run!(cpu::Processor)
         end
         errormonitor(
             @async while cpu.running[]
-                for (addr, t) in cpu.tasks
-                    if istaskfailed(t)
-                        @warn "task(address: $addr) is failed, recreating..."
-                        newt = @async while cpu.taskhandlers[addr]
-                            isempty(cpu.exechannels[addr]) || runcmd(cpu, popfirst!(cpu.exechannels[addr])...)
-                            yield()
+                if cpu.sleeping[]
+                    sleep(0.001)
+                else
+                    for (addr, t) in cpu.tasks
+                        if istaskfailed(t)
+                            @warn "task(address: $addr) is failed, recreating..."
+                            newt = @async while cpu.taskhandlers[addr]
+                                isempty(cpu.exechannels[addr]) || runcmd(cpu, popfirst!(cpu.exechannels[addr])...)
+                                yield()
+                            end
+                            @info "task(address: $addr) is recreated"
+                            push!(cpu.tasks, addr => errormonitor(newt))
                         end
-                        @info "task(address: $addr) is recreated"
-                        push!(cpu.tasks, addr => errormonitor(newt))
                     end
                 end
                 yield()
@@ -177,8 +187,12 @@ function run!(cpu::Processor)
     return nothing
 end
 
+tosleep!(cpu::Processor) = cpu.sleeping[] = true
+awake!(cpu::Processor) = cpu.sleeping[] = false
+
 function stop!(cpu::Processor)
     if cpu.running[]
+        cpu.sleeping[] = false
         cpu.running[] = false
         for addr in keys(cpu.taskhandlers)
             cpu.taskhandlers[addr] = false

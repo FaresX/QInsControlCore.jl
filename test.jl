@@ -1,4 +1,3 @@
-using Instruments
 using BenchmarkTools
 f(instr, val="") = (sleep(0.001); string(time()))
 g(instr) = ""
@@ -78,4 +77,5 @@ cpu.taskhandlers
 cpu.exechannels
 
 QInsControlCore.stop!(cpu)
-cpu
+QInsControlCore.tosleep(cpu)
+QInsControlCore.awake(cpu)
