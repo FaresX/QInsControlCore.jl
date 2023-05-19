@@ -76,6 +76,6 @@ cpu.tasks
 cpu.taskhandlers
 cpu.exechannels
 
-QInsControlCore.stop!(cpu)
-QInsControlCore.tosleep(cpu)
-QInsControlCore.awake(cpu)
+QInsControlCore.slow!(cpu)
+QInsControlCore.fast!(cpu)
+QInsControlCore.awake!(cpu)

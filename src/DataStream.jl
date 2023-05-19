@@ -16,7 +16,7 @@ struct Processor
     resourcemanager::UInt32
     instrs::Dict{String,Instrument}
     running::Ref{Bool}
-    sleeping::Ref{Bool}
+    fast::Ref{Bool}
     Processor() = new(uuid4(), Dict(), [], Dict(), Dict(), Dict(), ResourceManager(), Dict(), Ref(false), Ref(false))
 end
 
@@ -68,6 +68,7 @@ function logout!(cpu::Processor, addr::String)
 end
 
 function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:write})
+    @assert haskey(cpu.controllers, ct.id) "Controller is not logged in"
     cmdid = uuid4()
     push!(cpu.cmdchannel, (ct.id, cmdid, f, val, Val(:write)))
     t1 = time()
@@ -78,6 +79,7 @@ function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:write
     pop!(ct.databuf, cmdid)
 end
 function (ct::Controller)(f::Function, cpu::Processor, ::Val{:read})
+    @assert haskey(cpu.controllers, ct.id) "Controller is not logged in"
     cmdid = uuid4()
     push!(cpu.cmdchannel, (ct.id, cmdid, f, "", Val(:read)))
     t1 = time()
@@ -88,6 +90,7 @@ function (ct::Controller)(f::Function, cpu::Processor, ::Val{:read})
     pop!(ct.databuf, cmdid)
 end
 function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:query})
+    @assert haskey(cpu.controllers, ct.id) "Controller is not logged in"
     cmdid = uuid4()
     push!(cpu.cmdchannel, (ct.id, cmdid, f, val, Val(:query)))
     t1 = time()
@@ -117,7 +120,7 @@ end
 
 function init!(cpu::Processor)
     if !cpu.running[]
-        cpu.sleeping[] = false
+        cpu.fast[] = false
         empty!(cpu.cmdchannel)
         empty!(cpu.exechannels)
         empty!(cpu.tasks)
@@ -143,14 +146,11 @@ function run!(cpu::Processor)
         cpu.running[] = true
         errormonitor(
             @async while cpu.running[]
-                if cpu.sleeping[]
-                    sleep(0.001)
-                else
-                    if !isempty(cpu.cmdchannel)
-                        ctid, cmdid, f, val, type = popfirst!(cpu.cmdchannel)
-                        push!(cpu.exechannels[cpu.controllers[ctid].addr], (ctid, cmdid, f, val, type))
-                    end
+                if !isempty(cpu.cmdchannel)
+                    ctid, cmdid, f, val, type = popfirst!(cpu.cmdchannel)
+                    push!(cpu.exechannels[cpu.controllers[ctid].addr], (ctid, cmdid, f, val, type))
                 end
+                cpu.fast[] || sleep(0.001)
                 yield()
             end
         )
@@ -165,21 +165,18 @@ function run!(cpu::Processor)
         end
         errormonitor(
             @async while cpu.running[]
-                if cpu.sleeping[]
-                    sleep(0.001)
-                else
-                    for (addr, t) in cpu.tasks
-                        if istaskfailed(t)
-                            @warn "task(address: $addr) is failed, recreating..."
-                            newt = @async while cpu.taskhandlers[addr]
-                                isempty(cpu.exechannels[addr]) || runcmd(cpu, popfirst!(cpu.exechannels[addr])...)
-                                yield()
-                            end
-                            @info "task(address: $addr) is recreated"
-                            push!(cpu.tasks, addr => errormonitor(newt))
+                for (addr, t) in cpu.tasks
+                    if istaskfailed(t)
+                        @warn "task(address: $addr) is failed, recreating..."
+                        newt = @async while cpu.taskhandlers[addr]
+                            isempty(cpu.exechannels[addr]) || runcmd(cpu, popfirst!(cpu.exechannels[addr])...)
+                            yield()
                         end
+                        @info "task(address: $addr) is recreated"
+                        push!(cpu.tasks, addr => errormonitor(newt))
                     end
                 end
+                cpu.fast[] || sleep(0.001)
                 yield()
             end
         )
@@ -187,12 +184,9 @@ function run!(cpu::Processor)
     return nothing
 end
 
-tosleep!(cpu::Processor) = cpu.sleeping[] = true
-awake!(cpu::Processor) = cpu.sleeping[] = false
-
 function stop!(cpu::Processor)
     if cpu.running[]
-        cpu.sleeping[] = false
+        cpu.fast[] = false
         cpu.running[] = false
         for addr in keys(cpu.taskhandlers)
             cpu.taskhandlers[addr] = false
@@ -210,3 +204,7 @@ function stop!(cpu::Processor)
 end
 
 start!(cpu::Processor) = (init!(cpu); run!(cpu))
+
+slow!(cpu::Processor) = cpu.fast[] = false
+
+fast!(cpu::Processor) = cpu.fast[] = true

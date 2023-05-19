@@ -1,2 +1,6 @@
+*.jl.*.cov
+*.jl.cov
+*.jl.mem
+/docs/build/
+/test.jl
 .vscode
-test.jl
