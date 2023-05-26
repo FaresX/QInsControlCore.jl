@@ -7,6 +7,7 @@
 
 This package is used to resolve conflicts when multiple coprocesses send commands to the same instrument simultaneously.
 # install
+before you install this package, you must make sure that you have installed the NI VISA.
 ```
 julia> ]
 (@v1.9) pkg> add https://github.com/FaresX/QInsControlCore.jl.git
