@@ -20,6 +20,6 @@ makedocs(;
 )
 
 deploydocs(;
-    repo="github.com/FaresX/QInsControlCore.jl.git",
+    repo="github.com/FaresX/QInsControlCore.jl",
     devbranch="master",
 )
