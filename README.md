@@ -15,7 +15,7 @@ julia> ]
 ```julia
 using QInsControlCore
 cpu = Processor()
-ct = Controller()
+ct = Controller("VirtualInstr", "VirtualAddress")
 login!(cpu, ct)
 start!(cpu)
 idn = ct(query, cpu, "*IDN?", Val(:query))
