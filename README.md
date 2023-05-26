@@ -14,13 +14,11 @@ julia> ]
 # usage
 ```julia
 using QInsControlCore
-using QInsControlCore.Instruments
 cpu = Processor()
 ct = Controller()
 login!(cpu, ct)
 start!(cpu)
-idn_get(instr) = query(instr, "*IDN?")
-idn = ct(idn_get, cpu, Val(:read))
+idn = ct(query, cpu, "*IDN?", Val(:query))
 logout!(cpu, ct)
 stop!(cpu)
 ```
