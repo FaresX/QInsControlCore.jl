@@ -9,7 +9,7 @@ This package is used to resolve conflicts when multiple coprocesses send command
 # install
 ```
 julia> ]
-(@v1.9) pkg> add https://github.com/Faresx/QInsControlCore.jl.git
+(@v1.9) pkg> add https://github.com/FaresX/QInsControlCore.jl.git
 ```
 # usage
 ```julia
