@@ -54,7 +54,7 @@ struct Processor
     exechannels::Dict{String,Vector{Tuple{UUID,UUID,Function,String,Val}}}
     tasks::Dict{String,Task}
     taskhandlers::Dict{String,Bool}
-    resourcemanager::UInt32
+    resourcemanager::Ref{UInt32}
     instrs::Dict{String,Instrument}
     running::Ref{Bool}
     fast::Ref{Bool}
@@ -65,7 +65,7 @@ function Base.show(io::IO, cpu::Processor)
                 id : $(cpu.id)
            running : $(cpu.running[])
               mode : $(cpu.fast[] ? "fast" : "slow")
-   ResourceManager : $(cpu.resourcemanager)
+   ResourceManager : $(cpu.resourcemanager[])
        controllers :
     """
     print(io, str1)
@@ -93,7 +93,7 @@ end
 
 auto-detect available instruments.
 """
-find_resources(cpu::Processor) = Instruments.find_resources(cpu.resourcemanager)
+find_resources(cpu::Processor) = Instruments.find_resources(cpu.resourcemanager[])
 
 """
     login!(cpu::Processor, ct::Controller)
@@ -114,7 +114,7 @@ function login!(cpu::Processor, ct::Controller)
             end
             # @info "task(address: $(ct.addr)) is created"
             push!(cpu.tasks, ct.addr => errormonitor(t))
-            connect!(cpu.resourcemanager, cpu.instrs[ct.addr])
+            connect!(cpu.resourcemanager[], cpu.instrs[ct.addr])
         end
     else
         haskey(cpu.instrs, ct.addr) || push!(cpu.instrs, ct.addr => instrument(ct.instrnm, ct.addr))
@@ -212,10 +212,10 @@ function init!(cpu::Processor)
         empty!(cpu.exechannels)
         empty!(cpu.tasks)
         empty!(cpu.taskhandlers)
-        cpu.resourcemanager = ResourceManager()
+        cpu.resourcemanager[] = ResourceManager()
         for (addr, instr) in cpu.instrs
             try
-                connect!(cpu.resourcemanager, instr)
+                connect!(cpu.resourcemanager[], instr)
             catch e
                 @error "connecting to $addr failed" exception=e
             end
@@ -308,7 +308,7 @@ start!(cpu::Processor) = (init!(cpu); run!(cpu))
 
 reconnect the instruments that log in the Processor.
 """
-reconnect!(cpu::Processor) = connect!.(cpu.resourcemanager, values(cpu.instrs))
+reconnect!(cpu::Processor) = connect!.(cpu.resourcemanager[], values(cpu.instrs))
 
 """
     slow!(cpu::Processor)
