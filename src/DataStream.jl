@@ -212,6 +212,7 @@ function init!(cpu::Processor)
         empty!(cpu.exechannels)
         empty!(cpu.tasks)
         empty!(cpu.taskhandlers)
+        cpu.resourcemanager = ResourceManager()
         for (addr, instr) in cpu.instrs
             try
                 connect!(cpu.resourcemanager, instr)
