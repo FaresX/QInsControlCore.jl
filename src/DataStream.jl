@@ -279,8 +279,8 @@ stop the Processor.
 """
 function stop!(cpu::Processor)
     if cpu.running[]
-        cpu.fast[] = false
         cpu.running[] = false
+        cpu.fast[] = false
         for addr in keys(cpu.taskhandlers)
             cpu.taskhandlers[addr] = false
         end
