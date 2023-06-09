@@ -287,11 +287,15 @@ function stop!(cpu::Processor)
         for t in values(cpu.tasks)
             wait(t)
         end
-        empty!(cpu.taskhandlers)
-        empty!(cpu.tasks)
         for instr in values(cpu.instrs)
             disconnect!(instr)
         end
+        empty!(cpu.controllers)
+        empty!(cpu.cmdchannel)
+        empty!(cpu.exechannels)
+        empty!(cpu.taskhandlers)
+        empty!(cpu.tasks)
+        empty!(cpu.instrs)
     end
     return nothing
 end
