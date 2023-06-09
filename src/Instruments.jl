@@ -124,5 +124,5 @@ determine if the instrument is connected.
 """
 isconnected(instr::GPIBInstr) = instr.geninstr.connected
 isconnected(instr::SerialInstr) = instr.geninstr.connected
-isconnected(instr::TCPIPInstr) = instr.connected
+isconnected(instr::TCPIPInstr) = instr.connected[]
 isconnected(::VirtualInstr) = true
