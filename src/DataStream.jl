@@ -139,7 +139,11 @@ function logout!(cpu::Processor, ct::Controller)
         if cpu.running[]
             # @warn "cpu($(cpu.id)) is running!"
             cpu.taskhandlers[popinstr.addr] = false
-            wait(cpu.tasks[popinstr.addr])
+            try
+                wait(cpu.tasks[popinstr.addr])
+            catch e
+                @error "an error occurs during logging out" exception=e
+            end
             pop!(cpu.taskhandlers, popinstr.addr)
             pop!(cpu.tasks, popinstr.addr)
             pop!(cpu.exechannels, popinstr.addr)
@@ -285,7 +289,11 @@ function stop!(cpu::Processor)
             cpu.taskhandlers[addr] = false
         end
         for t in values(cpu.tasks)
-            wait(t)
+            try
+                wait(t)
+            catch e
+                @error "an error occurs during stopping Processor:\n$cpu" exception=e
+            end
         end
         for instr in values(cpu.instrs)
             disconnect!(instr)
