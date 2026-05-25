@@ -1,6 +1,6 @@
 name = "QInsControlCore"
 uuid = "cd9154b2-5d6d-4493-a0bc-3471f84f9c90"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["FaresX <fyzxst@sina.com> and contributors"]
 
 [deps]
