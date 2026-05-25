@@ -235,6 +235,14 @@ macro gentrycatch(instrnm, addr, cmd, retrysendtimes, retryconnecttimes, len=0)
     )
 end
 
+function counter(f, times::Integer=3)
+    for t in 1:times
+        state, val = f(t)
+        state && return true, val
+    end
+    return false, ""
+end
+
 macro gencontroller(key, val, retval=nothing, quiet=false)
     esc(
         quote
@@ -269,20 +277,54 @@ macro saveblock(var)
     )
 end
 
-macro psleep(seconds)
+function psleep(seconds)
     s1 = floor(seconds)
     s2 = floor(seconds - s1; digits=3) * 1000
-    esc(
-        quote
-            @progress for _ in 1:$s1
-                @gencontroller psleep $seconds
-                sleep(1)
-            end
-            for _ in 1:$s2
-                sleep(0.001)
-            end
-        end
-    )
+    @progress for _ in 1:s1
+        @gencontroller psleep $seconds
+        sleep(1)
+    end
+    for _ in 1:s2
+        sleep(0.001)
+    end
+end
+
+function timeaverage(data, τ)
+    idx = argmin(abs.([data[end][1] - d[1] for d in data] .- τ))
+    datasubset = [d[2] for d in data[idx:end]]
+    mv = mean(datasubset)
+    stdv = stdm(datasubset, mv)
+    return mv, stdv
+end
+function _ismoving(data, δ, τ)
+    isempty(data) && return true
+    δ, τ = abs(δ), abs(τ)
+    data[end][1] - data[1][1] < τ && return true
+    _, stdv = timeaverage(data, τ)
+    return stdv > 5δ
+end
+function isarrived(data, target, δ, τ)
+    isempty(data) && return false
+    δ, τ = abs(δ), abs(τ)
+    data[end][1] - data[1][1] < τ && return false
+    mv, stdv = timeaverage(data, τ)
+    arrive = abs(mv - target) < δ && stdv < 4δ
+    arrive && return true
+    data[end][1] - data[1][1] < 10τ && return false
+    arrive |= abs(mv - target) < 5δ && all(abs.((mv, stdv) .- timeaverage(data, 10τ)) .< δ)
+    return arrive
+end
+function isless(data, target, δ, τ)
+    isempty(data) && return false
+    δ, τ = abs(δ), abs(τ)
+    data[end][1] - data[1][1] < τ && return false
+    return timeaverage(data, τ)[1] - target < δ
+end
+function isgreater(data, target, δ, τ)
+    isempty(data) && return false
+    δ, τ = abs(δ), abs(τ)
+    data[end][1] - data[1][1] < τ && return false
+    return timeaverage(data, τ)[1] - target > -δ
 end
 
 newfile(filename="") = timed_remotecall_wait(filename -> Main.QInsControl.newfile(filename), 1, filename; timeout=60)
