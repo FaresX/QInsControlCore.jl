@@ -31,9 +31,9 @@ struct Controller
     databuf::Vector{String}
     available::Vector{Bool}
     ready::Vector{Bool}
-    timeout::Float64
-    Controller(instrnm, addr; buflen=16, timeout=6) = new(
-        instrnm, addr, fill("", buflen), trues(buflen), falses(buflen), timeout
+    busytimeout::Float64
+    Controller(instrnm, addr; buflen=16, busytimeout=54) = new(
+        instrnm, addr, fill("", buflen), trues(buflen), falses(buflen), busytimeout
     )
 end
 function Base.show(io::IO, ct::Controller)
@@ -58,11 +58,12 @@ struct Processor
     processtask::Ref{Task}
     tasks::Dict{String,Task}
     taskhandlers::Dict{String,Bool}
+    taskbusy::Dict{String,Bool}
     resourcemanager::Ref{UInt32}
     instrs::Dict{String,Instrument}
     running::Ref{Bool}
     fast::Ref{Bool}
-    Processor() = new(Threads.Condition(), [], [], Dict(), Ref{Task}(), Dict(), Dict(), 0, Dict(), false, false)
+    Processor() = new(Threads.Condition(), [], [], Dict(), Ref{Task}(), Dict(), Dict(), Dict(), 0, Dict(), false, false)
 end
 function Base.show(io::IO, cpu::Processor)
     str1 = """
@@ -74,8 +75,9 @@ function Base.show(io::IO, cpu::Processor)
     print(io, str1)
     for ct in cpu.controllers
         print(io, "\t\t\tController\n")
-        ct_strs = split(string(ct), '\n')[1:end-1]
-        print(io, string(join(fill("\t\t", 4) .* ct_strs, "\n"), "\n\n"))
+        print(io, ct)
+        # ct_strs = split(string(ct), '\n')[1:end-1]
+        # print(io, string(join(fill("\t\t", 4) .* ct_strs, "\n"), "\n\n"))
     end
     str2 = """
               tasks : 
@@ -103,29 +105,36 @@ find_resources(cpu::Processor) = Instruments.find_resources(cpu.resourcemanager[
 
 log the Controller in the Processor which can be done before and after the cpu started.
 """
-function login!(cpu::Processor, ct::Controller; quiet=true, attr=nothing)
+function login!(cpu::Processor, ct::Controller; quiet=true, attr=VirtualInstrAttr())
     lock(cpu.lock) do
-        ct in cpu.controllers || push!(cpu.controllers, ct)
-        if cpu.running[]
+        if ct ∉ cpu.controllers
             if !haskey(cpu.instrs, ct.addr)
-                cpu.instrs[ct.addr] = instrument(ct.instrnm, ct.addr; attr=attr)
-                cpu.exechannels[ct.addr] = []
-                cpu.taskhandlers[ct.addr] = true
-                cpu.tasks[ct.addr] = errormonitor(
-                    @async while cpu.taskhandlers[ct.addr]
-                        if isempty(cpu.exechannels[ct.addr])
-                            cpu.fast[] ? yield() : sleep(0.001)
-                        else
-                            runcmd(cpu, popfirst!(cpu.exechannels[ct.addr])...)
-                        end
+                instr = instrument(ct.instrnm, ct.addr; attr=attr)
+                cpu.instrs[ct.addr] = instr
+                if cpu.running[]
+                    try
+                        connect!(cpu.resourcemanager[], instr)
+                    catch e
+                        @error "an error occurs during connecting" exception = e
                     end
-                )
-                connect!(cpu.resourcemanager[], cpu.instrs[ct.addr])
+                    cpu.exechannels[ct.addr] = []
+                    cpu.taskhandlers[ct.addr] = true
+                    cpu.taskbusy[ct.addr] = false
+                    cpu.tasks[ct.addr] = errormonitor(
+                        @async while cpu.taskhandlers[ct.addr]
+                            if isempty(cpu.exechannels[ct.addr]) || cpu.taskbusy[ct.addr]
+                                cpu.fast[] ? yield() : sleep(0.001)
+                            else
+                                runcmd(cpu, popfirst!(cpu.exechannels[ct.addr])...)
+                            end
+                        end
+                    )
+                    cpu.instrs[ct.addr] = instr
+                end
             end
-        else
-            haskey(cpu.instrs, ct.addr) || (cpu.instrs[ct.addr] = instrument(ct.instrnm, ct.addr; attr=attr))
+            push!(cpu.controllers, ct)
+            quiet || @info "controller $(findfirst(==(ct), cpu.controllers)) has logged in"
         end
-        quiet || @info "controller $(findfirst(==(ct), cpu.controllers)) has logged in"
     end
     return nothing
 end
@@ -142,19 +151,16 @@ log all the Controllers that control the instrument with address addr out the Pr
 function logout!(cpu::Processor, ct::Controller; quiet=true)
     lock(cpu.lock) do
         if ct in cpu.controllers
-            if ct.addr ∉ [c.addr for c in cpu.controllers if c != ct]
-                popinstr = pop!(cpu.instrs, ct.addr)
+            if ct.instrnm == "" && ct.addr ∉ [c.addr for c in cpu.controllers if c != ct]
+                instr = cpu.instrs[ct.addr]
                 if cpu.running[]
-                    cpu.taskhandlers[popinstr.addr] = false
-                    try
-                        haskey(cpu.tasks, popinstr.addr) && wait(cpu.tasks[popinstr.addr])
-                    catch e
-                        @error "an error occurs during logging out" exception = e
-                    end
-                    delete!(cpu.taskhandlers, popinstr.addr)
-                    delete!(cpu.tasks, popinstr.addr)
-                    delete!(cpu.exechannels, popinstr.addr)
-                    disconnect!(popinstr)
+                    cpu.taskhandlers[instr.addr] = false
+                    haskey(cpu.tasks, instr.addr) && timedwhilefetch(cpu.tasks[instr.addr], 6; msg="force to stop task for $(instr.addr)")
+                    delete!(cpu.taskbusy, instr.addr)
+                    delete!(cpu.taskhandlers, instr.addr)
+                    delete!(cpu.tasks, instr.addr)
+                    delete!(cpu.exechannels, instr.addr)
+                    disconnect!(pop!(cpu.instrs, ct.addr))
                 end
             end
             idx = findfirst(==(ct), cpu.controllers)
@@ -165,16 +171,32 @@ function logout!(cpu::Processor, ct::Controller; quiet=true)
     return nothing
 end
 function logout!(cpu::Processor, addr::String; quiet=true)
-    for ct in cpu.controllers
-        ct.addr == addr && logout!(cpu, ct; quiet=quiet)
+    lock(cpu.lock) do
+        for ct in cpu.controllers
+            ct.addr == addr && logout!(cpu, ct; quiet=quiet)
+        end
+        if haskey(cpu.instrs, addr)
+            instr = cpu.instrs[addr]
+            if cpu.running[]
+                cpu.taskhandlers[instr.addr] = false
+                haskey(cpu.tasks, instr.addr) && timedwhilefetch(cpu.tasks[instr.addr], 6; msg="force to stop task for $(instr.addr)")
+                delete!(cpu.taskbusy, instr.addr)
+                delete!(cpu.taskhandlers, instr.addr)
+                delete!(cpu.tasks, instr.addr)
+                delete!(cpu.exechannels, instr.addr)
+                disconnect!(pop!(cpu.instrs, addr))
+            end
+            @warn "instrument $(addr) has been logged out"
+        end
     end
+    return nothing
 end
 
-function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:write})
+function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:write}; timeout=1)
     @assert ct in cpu.controllers "Controller is not logged in"
     @assert cpu.running[] "Processor is not running"
     availi = Ref{Int}(0)
-    isok = timedwhile(ct.timeout) do
+    isok = timedwhile(timeout) do
         for (i, avail) in enumerate(ct.available)
             avail && (ct.available[i] = false; availi[] = i; return true)
         end
@@ -184,15 +206,16 @@ function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:write
     i = availi[]
     ct.ready[i] = false
     push!(cpu.cmdchannel, (ct, i, f, val, Val(:write)))
-    isok = timedwhile(() -> ct.ready[i], ct.timeout)
+    timedwhile(() -> !cpu.taskbusy[ct.addr], ct.busytimeout)
+    isok = timedwhile(() -> ct.ready[i], timeout)
     ct.available[i] = true
-    return isok ? ct.databuf[i] : error("timeout")
+    return isok ? ct.databuf[i] : error("write timeout with ($f, $val)")
 end
-function (ct::Controller)(f::Function, cpu::Processor, ::Val{:read})
+function (ct::Controller)(f::Function, cpu::Processor, ::Val{:read}; timeout=1)
     @assert ct in cpu.controllers "Controller is not logged in"
     @assert cpu.running[] "Processor is not running"
     availi = Ref{Int}(0)
-    isok = timedwhile(ct.timeout) do
+    isok = timedwhile(timeout) do
         for (i, avail) in enumerate(ct.available)
             avail && (ct.available[i] = false; availi[] = i; return true)
         end
@@ -202,15 +225,16 @@ function (ct::Controller)(f::Function, cpu::Processor, ::Val{:read})
     i = availi[]
     ct.ready[i] = false
     push!(cpu.cmdchannel, (ct, i, f, "", Val(:read)))
-    isok = timedwhile(() -> ct.ready[i], ct.timeout)
+    timedwhile(() -> !cpu.taskbusy[ct.addr], ct.busytimeout)
+    isok = timedwhile(() -> ct.ready[i], timeout)
     ct.available[i] = true
-    return isok ? ct.databuf[i] : error("timeout")
+    return isok ? ct.databuf[i] : error("read timeout with $f")
 end
-function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:query})
+function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:query}; timeout=1)
     @assert ct in cpu.controllers "Controller is not logged in"
     @assert cpu.running[] "Processor is not running"
     availi = Ref{Int}(0)
-    isok = timedwhile(ct.timeout) do
+    isok = timedwhile(timeout) do
         for (i, avail) in enumerate(ct.available)
             avail && (ct.available[i] = false; availi[] = i; return true)
         end
@@ -220,25 +244,23 @@ function (ct::Controller)(f::Function, cpu::Processor, val::String, ::Val{:query
     i = availi[]
     ct.ready[i] = false
     push!(cpu.cmdchannel, (ct, i, f, val, Val(:query)))
-    isok = timedwhile(() -> ct.ready[i], ct.timeout)
+    timedwhile(() -> !cpu.taskbusy[ct.addr], ct.busytimeout)
+    isok = timedwhile(() -> ct.ready[i], timeout)
     ct.available[i] = true
-    return isok ? ct.databuf[i] : error("timeout")
+    return isok ? ct.databuf[i] : error("query timeout with ($f, $val)")
 end
 
 function runcmd(cpu::Processor, ct::Controller, i::Int, f::Function, val::String, ::Val{:write})
-    f(cpu.instrs[ct.addr], val)
+    wait(Threads.@spawn f(cpu.instrs[ct.addr], val))
     ct.ready[i] = true
-    return nothing
 end
 function runcmd(cpu::Processor, ct::Controller, i::Int, f::Function, ::String, ::Val{:read})
-    ct.databuf[i] = f(cpu.instrs[ct.addr])
+    ct.databuf[i] = fetch(Threads.@spawn f(cpu.instrs[ct.addr]))
     ct.ready[i] = true
-    return nothing
 end
 function runcmd(cpu::Processor, ct::Controller, i::Int, f::Function, val::String, ::Val{:query})
-    ct.databuf[i] = f(cpu.instrs[ct.addr], val)
+    ct.databuf[i] = fetch(Threads.@spawn f(cpu.instrs[ct.addr], val))
     ct.ready[i] = true
-    return nothing
 end
 
 function init!(cpu::Processor)
@@ -248,6 +270,7 @@ function init!(cpu::Processor)
         empty!(cpu.exechannels)
         empty!(cpu.tasks)
         empty!(cpu.taskhandlers)
+        empty!(cpu.taskbusy)
         cpu.resourcemanager[] = try
             ResourceManager()
         catch e
@@ -262,6 +285,7 @@ function init!(cpu::Processor)
             end
             cpu.exechannels[addr] = []
             cpu.taskhandlers[addr] = false
+            cpu.taskbusy[addr] = false
         end
         cpu.running[] = false
     end
@@ -283,6 +307,7 @@ function run!(cpu::Processor)
         )
         for (addr, exec) in cpu.exechannels
             cpu.taskhandlers[addr] = true
+            cpu.taskbusy[addr] = false
             t = @async while cpu.taskhandlers[addr]
                 isempty(exec) ? (cpu.fast[] ? yield() : sleep(0.001)) : runcmd(cpu, popfirst!(exec)...)
             end
@@ -308,10 +333,12 @@ function run!(cpu::Processor)
                     end
                     for (addr, t) in cpu.tasks
                         if istaskfailed(t) && haskey(cpu.exechannels, addr) && haskey(cpu.taskhandlers, addr)
-                            @warn "task(address: $addr) failed, recreating..."
+                            setbusy!(cpu, addr)
+                            @warn "task(address: $addr) failed, clearing buffer and recreating..."
+                            cpu.instrs[addr].attr.clearbuffer && clearbuffer(cpu.instrs[addr])
                             cpu.tasks[addr] = errormonitor(
                                 @async while cpu.taskhandlers[addr]
-                                    if isempty(cpu.exechannels[addr])
+                                    if isempty(cpu.exechannels[addr]) || cpu.taskbusy[addr]
                                         cpu.fast[] ? yield() : sleep(0.001)
                                     else
                                         runcmd(cpu, popfirst!(cpu.exechannels[addr])...)
@@ -319,6 +346,7 @@ function run!(cpu::Processor)
                                 end
                             )
                             @info "task(address: $addr) has been recreated"
+                            unsetbusy!(cpu, addr)
                         end
                     end
                 catch e
@@ -339,22 +367,15 @@ stop the Processor.
 function stop!(cpu::Processor)
     if cpu.running[]
         for addr in keys(cpu.taskhandlers)
+            cpu.taskbusy[addr] = false
             cpu.taskhandlers[addr] = false
         end
         for t in values(cpu.tasks)
-            try
-                wait(t)
-            catch e
-                @error "an error occurs during stopping Processor:\n$cpu" exception = e
-            end
+            timedwhilefetch(t, 6)
         end
         cpu.running[] = false
         cpu.fast[] = false
-        try
-            wait(cpu.processtask[])
-        catch e
-            @error "an error occurs during stopping Processor:\n$cpu" exception = e
-        end
+        timedwhilefetch(cpu.processtask[], 6; msg="force to stop processing task")
         for instr in values(cpu.instrs)
             disconnect!(instr)
         end
@@ -362,6 +383,7 @@ function stop!(cpu::Processor)
         empty!(cpu.cmdchannel)
         empty!(cpu.exechannels)
         empty!(cpu.taskhandlers)
+        empty!(cpu.taskbusy)
         empty!(cpu.tasks)
         empty!(cpu.instrs)
     end
@@ -380,7 +402,8 @@ start!(cpu::Processor) = (init!(cpu); run!(cpu))
 
 reconnect the instruments that log in the Processor.
 """
-reconnect!(cpu::Processor) = connect!.(cpu.resourcemanager[], values(cpu.instrs))
+reconnect!(cpu::Processor, addr::String) = haskey(cpu.instrs, addr) && (disconnect!(cpu.instrs[addr]); connect!(cpu.resourcemanager[], cpu.instrs[addr]))
+reconnect!(cpu::Processor) = map(addr -> reconnect!(cpu, addr), collect(keys(cpu.instrs)))
 
 """
     slow!(cpu::Processor)
@@ -395,3 +418,9 @@ slow!(cpu::Processor) = cpu.fast[] = false
 change the cpu mode to fast mode. Default mode is slow mode. The fast mode is not necessary in most cases.
 """
 fast!(cpu::Processor) = cpu.fast[] = true
+
+setbusy!(cpu::Processor, addr::String) = haskey(cpu.taskbusy, addr) && (cpu.taskbusy[addr] = true; @warn "set busy for $addr")
+unsetbusy!(cpu::Processor, addr::String) = haskey(cpu.taskbusy, addr) && (cpu.taskbusy[addr] = false; @info "unset busy for $addr")
+setbusy!(cpu::Processor) = map(addr -> setbusy!(cpu, addr), collect(keys(cpu.taskbusy)))
+unsetbusy!(cpu::Processor) = map(addr -> unsetbusy!(cpu, addr), collect(keys(cpu.taskbusy)))
+isbusy(cpu::Processor, addr::String) = haskey(cpu.taskbusy, addr) && cpu.taskbusy[addr]

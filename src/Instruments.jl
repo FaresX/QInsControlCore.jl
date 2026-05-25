@@ -9,9 +9,12 @@ abstract type InstrAttr end
     nstopbits::VI_ASRL_STOP = VI_ASRL_STOP_ONE
     #Common
     async::Bool = false
-    timeoutq::Real = 6
+    idnfunc::String = "idn"
+    timeoutw::Real = 0.3
+    timeoutr::Real = 3
     querydelay::Real = 0
     termchar::Char = '\n'
+    clearbuffer::Bool = true
 end
 
 @kwdef mutable struct SerialInstrAttr <: InstrAttr
@@ -25,22 +28,30 @@ end
     dtr::SPdtr = SP_DTR_OFF
     dsr::SPdsr = SP_DSR_IGNORE
     xonxoff::SPXonXoff = SP_XONXOFF_DISABLED
-    timeoutw::Real = 6
-    timeoutr::Real = 6
-    timeoutq::Real = 6
+    idnfunc::String = "idn"
+    timeoutw::Real = 0.3
+    timeoutr::Real = 3
     querydelay::Real = 0
     termchar::Char = '\n'
+    clearbuffer::Bool = true
 end
 
 @kwdef mutable struct TCPSocketInstrAttr <: InstrAttr
-    timeoutw::Real = 6
-    timeoutr::Real = 6
-    timeoutq::Real = 6
+    idnfunc::String = "idn"
+    timeoutw::Real = 0.3
+    timeoutr::Real = 3
     querydelay::Real = 0
     termchar::Char = '\n'
+    clearbuffer::Bool = true
 end
 
 @kwdef mutable struct VirtualInstrAttr <: InstrAttr
+    idnfunc::String = "idn"
+    timeoutw::Real = 0.3
+    timeoutr::Real = 3
+    querydelay::Real = 0
+    termchar::Char = '\n'
+    clearbuffer::Bool = true
 end
 
 struct VISAInstr <: Instrument
@@ -78,13 +89,84 @@ end
     attr::VirtualInstrAttr = VirtualInstrAttr()
 end
 
+@kwdef mutable struct ISOBUSInstr{T<:Instrument} <: Instrument
+    name::String
+    addr::String
+    rootaddr::String
+    subaddr::Int
+    handle::T
+    connected::Ref{Bool}
+    attr::InstrAttr
+end
+
+@kwdef mutable struct QICInstr{T<:Instrument} <: Instrument
+    name::String
+    addr::String
+    rootaddr::String
+    subaddr::String
+    handle::T
+    connected::Ref{Bool}
+    attr::InstrAttr
+end
+
+const PROXYSTATES = Dict{String,Bool}()
+const PROXYTIMEOUT = 6
+macro proxy(instr, ex)
+    esc(
+        quote
+            isok = timedwhile(PROXYTIMEOUT) do
+                avail = PROXYSTATES[$instr.rootaddr]
+                avail && (PROXYSTATES[$instr.rootaddr] = false)
+                return avail
+            end
+            if isok
+                result = try
+                    $ex
+                catch e
+                    rethrow(e)
+                finally
+                    PROXYSTATES[$instr.rootaddr] = true
+                end
+                return result
+            else
+                error(string($instr.addr, " timeout"))
+            end
+        end
+    )
+end
+
 """
     instrument(name, addr)
 
 generate an instrument with (name, addr) which automatically determines the type of this instrument.
 """
-function instrument(name, addr; attr=nothing)
-    if occursin("SERIAL", addr)
+function instrument(name, addr; attr=VirtualInstrAttr())
+    if occursin("QIC", addr)
+        try
+            strs = split(addr, "::QIC::")
+            rootaddr = strs[1]
+            subaddr = length(strs) == 2 ? strs[2] : join(strs[2:end], "::QIC::")
+            instr = instrument(name, rootaddr; attr=attr)
+            return QICInstr{typeof(instr)}(name, addr, rootaddr, subaddr, instr, false, instr.attr)
+        catch e
+            @error "address $addr is not valid" exception = e
+            setattr = isnothing(attr) || !isa(attr, VISAInstrAttr) ? VISAInstrAttr() : attr
+            return VISAInstr(name, addr, GenericInstrument(), false, setattr)
+        end
+    elseif occursin("ISOBUS", addr)
+        try
+            strs = split(addr, "::ISOBUS::")
+            rootaddr = strs[1]
+            subaddr = parse(Int, strs[2])
+            instr = instrument(name, rootaddr; attr=attr)
+            get!(PROXYSTATES, rootaddr, true)
+            return ISOBUSInstr{typeof(instr)}(name, addr, rootaddr, subaddr, instr, false, instr.attr)
+        catch e
+            @error "address $addr is not valid" exception = e
+            setattr = isnothing(attr) || !isa(attr, VISAInstrAttr) ? VISAInstrAttr() : attr
+            return VISAInstr(name, addr, GenericInstrument(), false, setattr)
+        end
+    elseif occursin("SERIAL", addr)
         try
             _, portstr = split(addr, "::")
             setattr = isnothing(attr) || !isa(attr, SerialInstrAttr) ? SerialInstrAttr() : attr
@@ -175,6 +257,8 @@ function connect!(_, instr::TCPSocketInstr)
     return instr.connected[]
 end
 connect!(_, instr::VirtualInstr) = instr.connected[] = true
+connect!(rm, instr::ISOBUSInstr) = instr.connected[] = connect!(rm, instr.handle)
+connect!(rm, instr::QICInstr) = instr.connected[] = connect!(rm, instr.handle)
 
 """
     disconnect!(instr)
@@ -190,15 +274,19 @@ function disconnect!(instr::Instrument)
 end
 disconnect!(instr::VISAInstr) = (Instruments.disconnect!(instr.handle); instr.connected[] = instr.handle.connected)
 disconnect!(instr::VirtualInstr) = instr.connected[] = false
+disconnect!(instr::ISOBUSInstr) = instr.connected[] = disconnect!(instr.handle)
+disconnect!(instr::QICInstr) = instr.connected[] = disconnect!(instr.handle)
 
 """
     write(instr, msg)
 
 write some message string to the instrument.
 """
-Base.write(instr::Instrument, msg) = write(instr.handle, string(msg, instr.attr.termchar))
+Base.write(instr::Instrument, msg::AbstractString) = write(instr.handle, string(msg, instr.attr.termchar))
 Base.write(instr::VISAInstr, msg::AbstractString) = (instr.attr.async ? writeasync : Instruments.write)(instr.handle, string(msg, instr.attr.termchar))
 Base.write(::VirtualInstr, ::AbstractString) = nothing
+Base.write(instr::ISOBUSInstr, msg::AbstractString) = @proxy instr write(instr.handle, string("@", instr.subaddr, msg))
+Base.write(instr::QICInstr, msg::AbstractString) = write(instr.handle, string(instr.subaddr, ":Q:", msg, ":Q:W"))
 
 """
     read(instr)
@@ -206,28 +294,46 @@ Base.write(::VirtualInstr, ::AbstractString) = nothing
 read the instrument.
 """
 function Base.read(instr::Instrument)
-    isok = timedwhile(() -> bytesavailable(instr.handle) > 0, instr.attr.timeoutr)
-    return isok ? readuntil(instr.handle, instr.attr.termchar) : error("read $(instr.addr) time out")
+    t = @async readuntil(instr.handle, instr.attr.termchar)
+    timedwhilefetch(t, instr.attr.timeoutr; msg="read $(instr.addr) timeout", throwerror=true)
 end
 Base.read(instr::VISAInstr) = (instr.attr.async ? readasync : Instruments.read)(instr.handle)
 Base.read(::VirtualInstr) = "read"
+Base.read(instr::ISOBUSInstr) = @proxy instr read(instr.handle)
+function Base.read(instr::QICInstr)
+    write(instr.handle, string(instr.subaddr, ":Q::Q:R"))
+    yield()
+    read(instr.handle)
+end
 
 """
     query(instr, msg; delay=0)
 
 query the instrument with some message string.
 """
-function _query_(instr::Instrument, msg::AbstractString)
+function _query_(instr::Instrument, msg::AbstractString; delay=0)
     write(instr, msg)
-    instr.attr.querydelay < 0.001 || sleep(instr.attr.querydelay)
-    t = @async read(instr)
-    isok = timedwhile(() -> istaskdone(t), instr.attr.timeoutq)
-    return isok ? fetch(t) : error("query $(instr.addr) time out")
+    sleep(delay)
+    read(instr)
 end
-query(instr::VISAInstr, msg::AbstractString) = (instr.attr.async ? queryasync(instr.handle, msg) : _query_(instr, msg))
-query(instr::SerialInstr, msg::AbstractString) = _query_(instr, msg)
-query(instr::TCPSocketInstr, msg::AbstractString) = _query_(instr, msg)
-query(::VirtualInstr, ::AbstractString) = "query"
+function query(instr::VISAInstr, msg::AbstractString; delay=instr.attr.querydelay)
+    instr.attr.async ? queryasync(instr.handle, msg; delay=delay) : _query_(instr, msg; delay=delay)
+end
+query(instr::SerialInstr, msg::AbstractString; delay=instr.attr.querydelay) = _query_(instr, msg; delay=delay)
+query(instr::TCPSocketInstr, msg::AbstractString; delay=instr.attr.querydelay) = _query_(instr, msg; delay=delay)
+query(::VirtualInstr, ::AbstractString; delay=0) = "query"
+function query(instr::ISOBUSInstr, msg::AbstractString; delay=0)
+    @proxy instr begin
+        write(instr.handle, string("@", instr.subaddr, msg))
+        sleep(delay)
+        read(instr.handle)
+    end
+end
+function query(instr::QICInstr, msg::AbstractString; delay=0)
+    write(instr.handle, string(instr.subaddr, ":Q:", msg, ":Q:Q$delay"))
+    sleep(delay)
+    read(instr.handle)
+end
 
 """
     isconnected(instr)
@@ -235,3 +341,26 @@ query(::VirtualInstr, ::AbstractString) = "query"
 determine if the instrument is connected.
 """
 isconnected(instr::Instrument) = instr.connected[]
+
+function clearbuffer(instr::Instrument)
+    for _ in 1:6
+        try
+            read(instr)
+        catch
+            break
+        end
+        yield()
+    end
+end
+function clearbuffer(instr::QICInstr)
+    for _ in 1:6
+        try
+            read(instr.handle)
+        catch
+            break
+        end
+        yield()
+    end
+end
+
+idn(instr) = query(instr, "*IDN?")
