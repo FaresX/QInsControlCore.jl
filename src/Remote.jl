@@ -11,15 +11,28 @@ export loadattr, syncattr, getattr
 export startlogger, stoplogger
 
 
+const LOGIO = IOBuffer()
+const LOGGERTASK = Ref{Task}()
 
 const CPU = Processor()
 const QICSERVER = QICServer()
 
-const LOGGERTASK::Ref{Task} = Ref{Task}()
+@enum SyncStatesIndex begin
+    IsDAQTaskRunning = 1
+    IsDAQTaskDone
+    IsInterrupted
+    IsBlocked
+    IsRefreshing
+    IsLogging
+    IsNewLogging
+end
+Base.getindex(x::AbstractVector{Bool}, i::SyncStatesIndex) = x[Int(i)]
+Base.setindex!(x::AbstractVector{Bool}, v::Bool, i::SyncStatesIndex) = x[Int(i)] = v
+global SYNCSTATES::SharedVector{Bool} = SharedVector{Bool}(length(instances(SyncStatesIndex)))
 
 const SWEEPCTS = Dict{String,Dict{String,Dict{String,Tuple{Ref{Bool},Controller}}}}()
 const REFRESHCTS = Dict{String,Dict{String,Controller}}()
-const REFRESHTASK::Ref{Task} = Ref{Task}()
+const REFRESHTASK = Ref{Task}()
 global REFRESHINRC::RemoteChannel{Channel{Tuple{String,String,String,Cfloat}}}
 global REFRESHOUTRC::RemoteChannel{Channel{Tuple{String,String,String,String}}}
 
@@ -28,26 +41,12 @@ global DATABUFRC::RemoteChannel{Channel{Vector{NTuple{2,String}}}}
 global EXTRADATABUFRC::RemoteChannel{Channel{Tuple{String,Vector{Any}}}}
 global PROGRESSRC::RemoteChannel{Channel{Vector{Tuple{UUID,Int,Int,Float64}}}}
 
-global LOGIO = stdout
-
-@enum SyncStatesIndex begin
-    IsDAQTaskRunning = 1
-    IsDAQTaskDone
-    IsInterrupted
-    IsBlocked
-    IsRefreshing
-    IsNewLogging
-end
-Base.getindex(x::AbstractVector{Bool}, i::SyncStatesIndex) = x[Int(i)]
-Base.setindex!(x::AbstractVector{Bool}, v::Bool, i::SyncStatesIndex) = x[Int(i)] = v
-global SYNCSTATES::SharedVector{Bool} = SharedVector{Bool}(length(instances(SyncStatesIndex)))
-
 ###### Logger ######
 function startlogger(dir)
-    global LOGIO = IOBuffer()
+    SYNCSTATES[IsLogging] = true
     global_logger(SimpleLogger(LOGIO))
     LOGGERTASK[] = errormonitor(
-        Threads.@spawn @trycatch mlstr("error in logging task") while true
+        Threads.@spawn @trycatch mlstr("error in logging task") while SYNCSTATES[IsLogging]
             update_log(dir, SYNCSTATES)
             sleep(1)
         end
@@ -59,10 +58,9 @@ function startlogger(dir)
         @warn mlstr("local logging task not started")
     end
     remotecall_wait(workers()[1], SYNCSTATES, dir) do SYNCSTATES, dir
-        global LOGIO = IOBuffer()
         global_logger(SimpleLogger(LOGIO))
         LOGGERTASK[] = errormonitor(
-            Threads.@spawn @trycatch mlstr("error in logging task") while true
+            Threads.@spawn @trycatch mlstr("error in logging task") while SYNCSTATES[IsLogging]
                 update_log(dir, SYNCSTATES)
                 sleep(1)
             end
@@ -76,6 +74,7 @@ function startlogger(dir)
     end
 end
 function stoplogger()
+    SYNCSTATES[IsLogging] = false
     @sync begin
         @async if isassigned(LOGGERTASK)
             sleep(0.1)
@@ -561,9 +560,9 @@ function remote_startrefresh(buflen=4)
     end
 end
 function remote_stoprefresh()
-    remotecall_wait(workers()[1], SYNCSTATES) do SYNCSTATES
+    SYNCSTATES[IsRefreshing] = false
+    remotecall_wait(workers()[1]) do
         isassigned(REFRESHTASK) || return nothing
-        SYNCSTATES[IsRefreshing] = false
         sleep(0.1)
         istaskdone(REFRESHTASK[]) || schedule(REFRESHTASK[], "Stop remote refresh"; error=true)
         if istaskdone(REFRESHTASK[])
