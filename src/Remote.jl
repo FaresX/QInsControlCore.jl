@@ -46,7 +46,7 @@ function startlogger(dir)
     SYNCSTATES[IsLogging] = true
     global_logger(SimpleLogger(LOGIO))
     LOGGERTASK[] = errormonitor(
-        Threads.@spawn @trycatch mlstr("error in logging task") while SYNCSTATES[IsLogging]
+        Threads.@spawn @trycatch mlstr("error in local logging task") while SYNCSTATES[IsLogging]
             update_log(dir, SYNCSTATES)
             sleep(1)
         end
@@ -60,7 +60,7 @@ function startlogger(dir)
     remotecall_wait(workers()[1], SYNCSTATES, dir) do SYNCSTATES, dir
         global_logger(SimpleLogger(LOGIO))
         LOGGERTASK[] = errormonitor(
-            Threads.@spawn @trycatch mlstr("error in logging task") while SYNCSTATES[IsLogging]
+            Threads.@spawn @trycatch mlstr("error in remote logging task") while SYNCSTATES[IsLogging]
                 update_log(dir, SYNCSTATES)
                 sleep(1)
             end
