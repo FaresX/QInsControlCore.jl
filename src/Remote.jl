@@ -8,10 +8,14 @@ export remote_startrefresh, remote_stoprefresh, putinput!, takeoutput!, isoutput
 export remote_continue, remote_check_instr, remote_def_prog, remote_runtask
 export isready_databufrc, isready_extradatabufrc, isready_progressrc, take_databufrc!, take_extradatabufrc!, take_progressrc!
 export loadattr, syncattr, getattr
+export startlogger, stoplogger
+
 
 
 const CPU = Processor()
 const QICSERVER = QICServer()
+
+const LOGGERTASK::Ref{Task} = Ref{Task}()
 
 const SWEEPCTS = Dict{String,Dict{String,Dict{String,Tuple{Ref{Bool},Controller}}}}()
 const REFRESHCTS = Dict{String,Dict{String,Controller}}()
@@ -42,16 +46,56 @@ global SYNCSTATES::SharedVector{Bool} = SharedVector{Bool}(length(instances(Sync
 function startlogger(dir)
     global LOGIO = IOBuffer()
     global_logger(SimpleLogger(LOGIO))
-    @async @trycatch mlstr("error in logging task") while true
-        update_log(dir, SYNCSTATES)
-        sleep(1)
+    LOGGERTASK[] = errormonitor(
+        Threads.@spawn @trycatch mlstr("error in logging task") while true
+            update_log(dir, SYNCSTATES)
+            sleep(1)
+        end
+    )
+    sleep(0.1)
+    if istaskstarted(LOGGERTASK[])
+        @info mlstr("local logging task started")
+    else
+        @warn mlstr("local logging task not started")
     end
     remotecall_wait(workers()[1], SYNCSTATES, dir) do SYNCSTATES, dir
         global LOGIO = IOBuffer()
         global_logger(SimpleLogger(LOGIO))
-        @async @trycatch mlstr("error in logging task") while true
-            update_log(dir, SYNCSTATES)
-            sleep(1)
+        LOGGERTASK[] = errormonitor(
+            Threads.@spawn @trycatch mlstr("error in logging task") while true
+                update_log(dir, SYNCSTATES)
+                sleep(1)
+            end
+        )
+        sleep(0.1)
+        if istaskstarted(LOGGERTASK[])
+            @info mlstr("remote logging task started")
+        else
+            @warn mlstr("remote logging task not started")
+        end
+    end
+end
+function stoplogger()
+    @sync begin
+        @async if isassigned(LOGGERTASK)
+            sleep(0.1)
+            istaskdone(LOGGERTASK[]) || schedule(LOGGERTASK[], mlstr("Stop local logging task"); error=true)
+            if istaskdone(LOGGERTASK[])
+                @info mlstr("local logging task stopped")
+            else
+                @warn mlstr("local logging task not stopped")
+            end
+        end
+        @async remotecall_wait(workers()[1]) do
+            if isassigned(LOGGERTASK)
+                sleep(0.1)
+                istaskdone(LOGGERTASK[]) || schedule(LOGGERTASK[], mlstr("Stop remote logging task"); error=true)
+                if istaskdone(LOGGERTASK[])
+                    @info mlstr("remote logging task stopped")
+                else
+                    @warn mlstr("remote logging task not stopped")
+                end
+            end
         end
     end
 end
@@ -140,7 +184,7 @@ function tsp_expr(instrnm, quantity, tspstr)
 end
 
 ###### CPU Monitor ######
-remote_set_libvisa!(visapath) = timed_remotecall_wait(visapath-> set_libvisa(visapath), workers()[1], visapath)
+remote_set_libvisa!(visapath) = timed_remotecall_wait(visapath -> set_libvisa(visapath), workers()[1], visapath)
 remote_startcpu!() = timed_remotecall_wait(() -> start!(CPU), workers()[1])
 remote_stopcpu!() = timed_remotecall_wait(() -> stop!(CPU), workers()[1])
 remote_cpumode!(mode) = timed_remotecall_wait(mode -> CPU.fast[] = mode, workers()[1], mode)
@@ -478,7 +522,7 @@ function remote_startrefresh(buflen=4)
         workers()[1], REFRESHINRC, REFRESHOUTRC, SYNCSTATES, buflen
     ) do REFRESHINRC, REFRESHOUTRC, SYNCSTATES, buflen
         SYNCSTATES[IsRefreshing] = true
-        global REFRESHTASK[] = errormonitor(
+        REFRESHTASK[] = errormonitor(
             Threads.@spawn while SYNCSTATES[IsRefreshing]
                 if isready(REFRESHINRC)
                     instrnm, addr, qtnm, timeoutr = take!(REFRESHINRC)
@@ -565,11 +609,10 @@ function remote_check_instr(instrnm, addr, buflen, retryconnecttimes, retrysendt
     end
 end
 
-function remote_def_prog(func1, func2)
-    timed_remotecall_wait(workers()[1], func1, func2, SYNCSTATES; timeout=60) do func1, func2, SYNCSTATES
+function remote_def_prog(func)
+    timed_remotecall_wait(workers()[1], func, SYNCSTATES; timeout=60) do func, SYNCSTATES
         try
-            @info "[$(now())]\n" task = func1
-            eval(func2)
+            eval(func)
         catch e
             SYNCSTATES[IsDAQTaskDone] = true
             @error "[$(now())]\nerrors in program definition!!!" exception = e
